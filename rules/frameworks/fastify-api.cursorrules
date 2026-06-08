@@ -1,0 +1,183 @@
+# Fastify API Rules — GoodEpoch Cursor Rules Pack v1
+# Applies to: Fastify 5.x on Node.js 22+
+# Stack: Fastify 5, TypeScript 5.5+, Node.js 22 LTS
+
+## Why Fastify Over Express
+
+- Fastify is 2-3x faster than Express. Use it for any new API in 2026
+- Schema-first validation with JSON Schema or zod via `@fastify/zod-type-provider`
+- TypeBox integration for full type safety on request/response
+- Plugin system prevents circular dependencies and handles async initialization
+
+## Project Structure
+
+```
+src/
+  plugins/          # Fastify plugins (db, auth, sensible)
+  routes/           # Route definitions with schemas
+  services/         # Business logic
+  schemas/          # Shared TypeBox/Zod schemas
+  hooks/            # Lifecycle hooks
+  types/            # TypeScript types
+  app.ts            # App factory function
+  server.ts         # Entry point
+```
+
+## App Setup
+
+```typescript
+// app.ts — always export a factory, not a singleton
+import Fastify from 'fastify'
+import { TypeBoxTypeProvider } from '@fastify/type-provider-typebox'
+
+export const buildApp = async () => {
+  const app = Fastify({ logger: true }).withTypeProvider<TypeBoxTypeProvider>()
+  
+  await app.register(import('@fastify/sensible'))  // Adds error helpers
+  await app.register(import('./plugins/db'))
+  await app.register(import('./plugins/auth'))
+  await app.register(import('./routes/users'), { prefix: '/api/users' })
+  
+  return app
+}
+
+// server.ts
+const app = await buildApp()
+await app.listen({ port: 3000, host: '0.0.0.0' })
+```
+
+## Schema-First Route Definitions
+
+- Define request/response schemas inline using TypeBox:
+  ```typescript
+  import { Type } from '@sinclair/typebox'
+  
+  const CreateUserBody = Type.Object({
+    email: Type.String({ format: 'email' }),
+    name: Type.String({ minLength: 1, maxLength: 100 }),
+  })
+  
+  const UserResponse = Type.Object({
+    id: Type.String(),
+    email: Type.String(),
+    name: Type.String(),
+    createdAt: Type.String({ format: 'date-time' }),
+  })
+  
+  app.post('/', {
+    schema: {
+      body: CreateUserBody,
+      response: { 201: UserResponse }
+    }
+  }, async (req, reply) => {
+    const user = await userService.create(req.body)  // req.body is fully typed
+    return reply.code(201).send(user)
+  })
+  ```
+- Fastify validates and serializes automatically — no manual validation needed
+- Response schema serialization is ~2x faster than JSON.stringify
+
+## Plugin Pattern
+
+- Every cross-cutting concern is a plugin:
+  ```typescript
+  // plugins/db.ts
+  import fp from 'fastify-plugin'
+  import { drizzle } from 'drizzle-orm/node-postgres'
+  
+  export default fp(async (app) => {
+    const db = drizzle(process.env.DATABASE_URL!)
+    app.decorate('db', db)
+    app.addHook('onClose', async () => { await db.$client.end() })
+  }, { name: 'db' })
+  
+  // Extend types
+  declare module 'fastify' {
+    interface FastifyInstance { db: ReturnType<typeof drizzle> }
+  }
+  ```
+- `fastify-plugin` (`fp`) unwraps the plugin scope so decorations are available app-wide
+- Register plugins once, use everywhere via `app.db`, `app.redis`, etc.
+
+## Error Handling
+
+- Use `@fastify/sensible` for HTTP errors: `reply.badRequest()`, `reply.notFound()`, `reply.unauthorized()`
+- Custom error handler:
+  ```typescript
+  app.setErrorHandler((error, request, reply) => {
+    if (error.validation) {
+      return reply.code(400).send({ error: 'VALIDATION_ERROR', details: error.validation })
+    }
+    request.log.error({ err: error }, 'Unhandled error')
+    reply.code(error.statusCode ?? 500).send({ error: error.message })
+  })
+  ```
+- Fastify catches async errors automatically — no try/catch needed in route handlers unless you want custom handling
+
+## Authentication with @fastify/jwt
+
+```typescript
+// plugins/auth.ts
+import fp from 'fastify-plugin'
+import jwt from '@fastify/jwt'
+
+export default fp(async (app) => {
+  await app.register(jwt, { secret: process.env.JWT_SECRET! })
+  
+  app.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      await request.jwtVerify()
+    } catch {
+      reply.unauthorized('Invalid or expired token')
+    }
+  })
+})
+
+// In routes
+app.get('/profile', { onRequest: [app.authenticate] }, async (req, reply) => {
+  return req.user  // typed by jwt payload declaration
+})
+```
+
+## Hooks
+
+- `onRequest`: auth, rate limiting (runs before parsing)
+- `preHandler`: validation logic, authorization (runs after parsing)
+- `onSend`: response transformation, headers
+- `onClose`: cleanup (DB connections, caches)
+- Use hooks for cross-cutting concerns, not for business logic
+
+## Logging
+
+- Fastify ships with `pino` built in — `request.log` for per-request logging
+- Structured logging automatically includes `requestId`, method, url, statusCode, responseTime
+- Never use `console.log` — use `app.log.info()` or `request.log.info()`
+- In development, use `pino-pretty` for human-readable logs
+
+## Performance Tips
+
+- Keep plugins small and focused — Fastify optimizes per-route schemas at startup
+- Use `Type.Strict()` in TypeBox schemas to strip unknown properties from responses
+- `fastify-caching` or Redis for response caching on read-heavy endpoints
+- Avoid JSON schema $ref in hot paths — inline schemas are faster
+- Use `reply.raw` only when streaming large responses
+
+## Testing
+
+```typescript
+// Use buildApp() factory in tests
+import { buildApp } from '../src/app'
+
+test('POST /users creates user', async () => {
+  const app = await buildApp()
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/users',
+    payload: { email: 'test@example.com', name: 'Test' }
+  })
+  expect(res.statusCode).toBe(201)
+  expect(res.json().email).toBe('test@example.com')
+})
+```
+- `app.inject()` for in-process testing — no real HTTP, ultra fast
+- Never start the actual server in tests

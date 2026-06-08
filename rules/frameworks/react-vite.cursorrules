@@ -1,0 +1,135 @@
+# React + Vite Rules — GoodEpoch Cursor Rules Pack v1
+# Applies to: React 19 with Vite 6+
+# Stack: React 19, Vite 6, TypeScript 5.5+, React Router v7 or TanStack Router
+
+## Project Structure
+
+- Organize by feature, not by type:
+  ```
+  src/
+    features/
+      auth/
+        components/
+        hooks/
+        api/
+        types.ts
+      dashboard/
+    components/       # Shared UI only
+    lib/              # Utils, config, third-party setup
+    hooks/            # Shared hooks
+  ```
+- Keep `src/main.tsx` minimal — just rendering the root component
+- `src/App.tsx` handles routing and top-level providers only
+
+## React 19 Patterns
+
+- Use `use()` hook for promises and context in render:
+  ```typescript
+  // Read context with use() — works conditionally unlike useContext
+  const theme = use(ThemeContext)
+  ```
+- React 19 actions: `useActionState` for form state, `useFormStatus` for pending state
+- `useOptimistic` for optimistic UI updates on mutations
+- `useTransition` to mark non-urgent state updates, keeping UI responsive
+- `startTransition` for router navigations and expensive state changes
+
+## Routing with TanStack Router (preferred for type safety)
+
+- Define routes with full type safety using `createFileRoute`:
+  ```typescript
+  // routes/users/$userId.tsx
+  export const Route = createFileRoute('/users/$userId')({
+    loader: ({ params }) => fetchUser(params.userId),
+    component: UserPage,
+  })
+  ```
+- Use `loaders` for data fetching — they run before render, enable prefetching
+- Type-safe `Link` and `navigate` — TypeScript catches invalid routes at compile time
+- Search params as typed state: define schema with `validateSearch`
+
+## Routing with React Router v7 (if used)
+
+- Data Router mode: define loaders and actions on routes, not in components
+- `useFetcher` for non-navigation mutations (forms that don't navigate away)
+- `Await` component with `defer` for streaming non-critical data
+- Nested routes for shared layouts — avoid duplicating layout code
+
+## State Management
+
+- URL search params for filter/sort/pagination state — shareable, bookmarkable
+- TanStack Query for all server state — don't duplicate in useState:
+  ```typescript
+  const { data: users, isPending } = useQuery({
+    queryKey: ['users', filters],
+    queryFn: () => fetchUsers(filters),
+  })
+  const { mutate: createUser } = useMutation({
+    mutationFn: createUserApi,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] })
+  })
+  ```
+- Zustand for global client state (auth user, UI preferences, cart)
+- `jotai` for fine-grained atomic state when Zustand feels heavy
+
+## Vite Configuration
+
+- Use `vite-tsconfig-paths` plugin — enables `@/` path aliases from tsconfig
+- Configure proxy in `vite.config.ts` for local API development:
+  ```typescript
+  server: { proxy: { '/api': 'http://localhost:3001' } }
+  ```
+- Environment variables: `import.meta.env.VITE_*` prefix (not process.env)
+- Validate env at startup in `src/lib/env.ts` with zod
+- Use `import.meta.env.MODE` for dev/prod checks, not `process.env.NODE_ENV`
+
+## Data Fetching
+
+- Axios or native `fetch` — wrap in a typed client:
+  ```typescript
+  // lib/api.ts
+  export const api = {
+    get: <T>(url: string) => fetch(url).then(r => {
+      if (!r.ok) throw new ApiError(r.status, url)
+      return r.json() as Promise<T>
+    })
+  }
+  ```
+- All API calls go through a central client — never raw fetch scattered in components
+- Use TanStack Query's `queryClient.prefetchQuery` for hover/intent-based prefetching
+
+## Forms
+
+- `react-hook-form` + `zod` resolver for all forms:
+  ```typescript
+  const form = useForm<CreateUserInput>({
+    resolver: zodResolver(createUserSchema),
+    defaultValues: { name: '', email: '' }
+  })
+  ```
+- Never manage form state with multiple `useState` calls
+- `Controller` component for custom inputs that don't expose native input events
+
+## Performance
+
+- `React.lazy` + `Suspense` for route-level code splitting (Vite handles this automatically with dynamic import)
+- `React.memo` only on components that receive stable props and re-render frequently — profile first
+- Virtualize long lists with `@tanstack/virtual`
+- Image optimization: use `vite-imagetools` or serve from CDN
+
+## Error Handling
+
+- Error boundaries at route level minimum:
+  ```typescript
+  // React Router: errorElement in route config
+  // TanStack Router: errorComponent on route definition
+  ```
+- `react-error-boundary` for component-level boundaries
+- Global unhandled rejection handler in `main.tsx`
+
+## Dev Tooling
+
+- Vitest for unit/integration tests (same config as Vite, fast)
+- React Testing Library for component tests
+- Playwright for E2E — configure with `baseURL: 'http://localhost:5173'`
+- `eslint-plugin-react-hooks` — enforces hooks rules
+- Prettier + `eslint-config-prettier` — format on save

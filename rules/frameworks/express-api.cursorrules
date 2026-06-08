@@ -1,0 +1,165 @@
+# Express.js API Rules — GoodEpoch Cursor Rules Pack v1
+# Applies to: Express.js 5.x on Node.js 22+
+# Stack: Express 5, TypeScript 5.5+, Node.js 22 LTS
+
+## Project Structure
+
+```
+src/
+  routes/           # Route handlers only — thin, delegate to services
+  services/         # Business logic
+  middleware/       # Custom middleware
+  validators/       # Zod schemas for request validation
+  models/           # Database models/types
+  lib/              # DB client, external service clients
+  types/            # Shared TypeScript types
+  app.ts            # Express app setup (no server listen)
+  server.ts         # Server entry point (listen here)
+```
+
+## Express 5 Specifics
+
+- Express 5 natively supports async route handlers — no `express-async-errors` needed:
+  ```typescript
+  router.get('/users/:id', async (req, res) => {
+    const user = await userService.findById(req.params.id)
+    res.json(user) // async errors auto-propagate to error handler
+  })
+  ```
+- Use `Router` instances for feature modules, mount at app level
+- `router.param()` for parameter preprocessing and validation
+
+## Request Validation
+
+- Validate ALL request inputs with zod before processing:
+  ```typescript
+  // validators/user.ts
+  export const createUserSchema = z.object({
+    body: z.object({
+      email: z.string().email(),
+      name: z.string().min(1).max(100),
+    })
+  })
+  
+  // middleware/validate.ts
+  export const validate = (schema: AnyZodObject) =>
+    async (req: Request, res: Response, next: NextFunction) => {
+      const result = await schema.safeParseAsync({
+        body: req.body, query: req.query, params: req.params
+      })
+      if (!result.success) {
+        return res.status(400).json({ errors: result.error.flatten() })
+      }
+      next()
+    }
+  ```
+- Apply validation middleware before route handler, not inside it
+
+## Response Conventions
+
+- Consistent response shape across all endpoints:
+  ```typescript
+  // Success
+  res.status(200).json({ data: result })
+  // Created
+  res.status(201).json({ data: created, message: 'Created successfully' })
+  // No content
+  res.status(204).send()
+  // Error
+  res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: '...', details: {} } })
+  ```
+- Never mix response shapes — define a typed `ApiResponse<T>` helper
+- Set explicit status codes always — never rely on default 200
+
+## Error Handling
+
+- Centralized error handler as the last middleware:
+  ```typescript
+  app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+    if (err instanceof AppError) {
+      return res.status(err.statusCode).json({ error: err.toJSON() })
+    }
+    logger.error({ err, path: req.path }, 'Unhandled error')
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } })
+  })
+  ```
+- Custom `AppError` class with `statusCode`, `code`, and `isOperational` fields
+- Distinguish operational errors (user error, expected) from programmer errors (bugs)
+- Never leak stack traces to API responses in production
+
+## Middleware Stack (order matters)
+
+```typescript
+app.use(helmet())                    // Security headers
+app.use(cors(corsConfig))            // CORS before routes
+app.use(express.json({ limit: '1mb' }))
+app.use(requestId())                 // Attach request ID
+app.use(requestLogger())             // Log all requests
+// Routes here
+app.use(notFoundHandler)             // 404 catcher
+app.use(errorHandler)                // Error handler last
+```
+
+## Authentication Middleware
+
+- JWT verification as middleware, not per-route:
+  ```typescript
+  export const requireAuth: RequestHandler = async (req, res, next) => {
+    const token = req.headers.authorization?.replace('Bearer ', '')
+    if (!token) return res.status(401).json({ error: { code: 'UNAUTHORIZED' } })
+    try {
+      req.user = await verifyToken(token)
+      next()
+    } catch {
+      res.status(401).json({ error: { code: 'INVALID_TOKEN' } })
+    }
+  }
+  ```
+- Extend `Request` type via declaration merging in `types/express.d.ts`
+- Use route-level middleware, not app-level, for auth (public routes exist)
+
+## Service Layer Pattern
+
+- Route handlers delegate to service functions. Zero business logic in routes:
+  ```typescript
+  // routes/users.ts
+  router.post('/', validate(createUserSchema), async (req, res) => {
+    const user = await userService.create(req.body)
+    res.status(201).json({ data: user })
+  })
+  
+  // services/user.ts
+  export const userService = {
+    create: async (input: CreateUserInput): Promise<User> => {
+      // business logic, database calls here
+    }
+  }
+  ```
+
+## Logging
+
+- Use `pino` for structured JSON logging — never `console.log` in production
+- Log at request level with `pino-http`, include `requestId`, method, path, status, duration
+- Log errors with full context: `logger.error({ err, userId, action }, 'message')`
+
+## Environment and Config
+
+- Validate env vars at startup, fail fast if required vars are missing:
+  ```typescript
+  // config/env.ts
+  const envSchema = z.object({
+    NODE_ENV: z.enum(['development', 'test', 'production']),
+    PORT: z.coerce.number().default(3000),
+    DATABASE_URL: z.string().url(),
+    JWT_SECRET: z.string().min(32),
+  })
+  export const env = envSchema.parse(process.env)
+  ```
+
+## Performance and Security
+
+- Use `compression` middleware for responses > 1KB
+- Rate limiting with `express-rate-limit` on auth routes minimum
+- `helmet()` for security headers (CSP, HSTS, X-Frame-Options)
+- Connection pooling for database — never new connection per request
+- Set `trust proxy` if behind reverse proxy: `app.set('trust proxy', 1)`

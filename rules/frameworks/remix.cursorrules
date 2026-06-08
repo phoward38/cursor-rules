@@ -1,0 +1,149 @@
+# Remix Rules — GoodEpoch Cursor Rules Pack v1
+# Applies to: Remix v2+ / React Router v7 (framework mode)
+# Stack: Remix/RRv7, React 19, TypeScript 5.5+
+
+## Mental Model: Web Standards First
+
+- Remix is built on Web APIs — Request/Response/FormData/URL, not abstractions over them
+- Think in HTTP: every route handles requests and returns responses
+- Progressive enhancement is the goal: forms work without JS, JS enhances the experience
+- Loaders run on server only. Actions run on server only. Components can run on both.
+
+## Route Conventions (Remix v2 flat file routing)
+
+```
+app/
+  routes/
+    _index.tsx              # / (home)
+    users.tsx               # /users layout
+    users._index.tsx        # /users index
+    users.$userId.tsx       # /users/:userId
+    users.$userId.edit.tsx  # /users/:userId/edit
+    users_.new.tsx          # /users/new (breaks out of users layout)
+    _auth.login.tsx         # /login (no auth layout prefix in URL)
+    _auth.tsx               # auth layout wrapper
+```
+
+## Loaders — Data Fetching
+
+- Every route that needs data exports a `loader`:
+  ```typescript
+  import { json, type LoaderFunctionArgs } from '@remix-run/node'
+  import { useLoaderData } from '@remix-run/react'
+  
+  export async function loader({ params, request }: LoaderFunctionArgs) {
+    const user = await getUserById(params.userId)
+    if (!user) throw new Response('Not Found', { status: 404 })
+    return json({ user })
+  }
+  
+  export default function UserPage() {
+    const { user } = useLoaderData<typeof loader>()  // fully typed
+    return <div>{user.name}</div>
+  }
+  ```
+- Never fetch in components — always use loaders
+- `throw new Response()` for HTTP errors — they're caught by error boundaries
+- Use `defer()` for non-critical data that can load after initial render
+
+## Actions — Mutations
+
+- Every form mutation uses an `action` function, not an API endpoint:
+  ```typescript
+  import { redirect, type ActionFunctionArgs } from '@remix-run/node'
+  
+  export async function action({ request, params }: ActionFunctionArgs) {
+    const formData = await request.formData()
+    const name = formData.get('name')
+    
+    const result = updateUserSchema.safeParse({ name, id: params.userId })
+    if (!result.success) {
+      return json({ errors: result.error.flatten() }, { status: 400 })
+    }
+    
+    await updateUser(result.data)
+    return redirect(`/users/${params.userId}`)
+  }
+  ```
+- Return errors from actions, throw for HTTP errors
+- Always redirect after successful POST (PRG pattern)
+- Use `intent` hidden field for routes with multiple actions
+
+## Forms — Progressive Enhancement
+
+- Native `<Form>` from Remix for all mutations:
+  ```typescript
+  import { Form, useNavigation, useActionData } from '@remix-run/react'
+  
+  export default function EditUser() {
+    const errors = useActionData<typeof action>()
+    const navigation = useNavigation()
+    const isSubmitting = navigation.state === 'submitting'
+    
+    return (
+      <Form method="post">
+        <input name="name" />
+        {errors?.fieldErrors.name && <p>{errors.fieldErrors.name}</p>}
+        <button disabled={isSubmitting}>
+          {isSubmitting ? 'Saving...' : 'Save'}
+        </button>
+      </Form>
+    )
+  }
+  ```
+- `useFetcher` for forms that don't navigate (inline editing, likes, etc.)
+- `fetcher.Form` for non-navigating mutations
+
+## Authentication
+
+- Session-based auth preferred over JWT in Remix (server renders, no token management):
+  ```typescript
+  // lib/session.ts
+  import { createCookieSessionStorage } from '@remix-run/node'
+  
+  export const { getSession, commitSession, destroySession } =
+    createCookieSessionStorage({
+      cookie: {
+        name: '__session',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        secrets: [process.env.SESSION_SECRET!],
+      }
+    })
+  ```
+- Auth check in loaders: `if (!user) throw redirect('/login')`
+- `requireUser` helper that throws redirect if not authenticated
+
+## Error Boundaries
+
+- Every route should have an `ErrorBoundary`:
+  ```typescript
+  export function ErrorBoundary() {
+    const error = useRouteError()
+    if (isRouteErrorResponse(error)) {
+      return <div>HTTP {error.status}: {error.data}</div>
+    }
+    return <div>Unexpected error: {error.message}</div>
+  }
+  ```
+- Errors bubble up to the nearest ErrorBoundary — fine-grained control
+
+## Meta and SEO
+
+```typescript
+import type { MetaFunction } from '@remix-run/node'
+
+export const meta: MetaFunction<typeof loader> = ({ data }) => [
+  { title: data?.user.name ?? 'User' },
+  { name: 'description', content: `Profile of ${data?.user.name}` },
+  { property: 'og:title', content: data?.user.name },
+]
+```
+
+## Performance
+
+- Loaders run in parallel automatically — nested route loaders fetch concurrently
+- `prefetch="intent"` on `<Link>` for hover-intent prefetching
+- `defer()` + `<Await>` for streaming slow data without blocking render
+- HTTP caching headers in loader responses: `Cache-Control: private, max-age=300`

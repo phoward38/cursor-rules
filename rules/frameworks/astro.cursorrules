@@ -1,0 +1,127 @@
+# Astro Rules — GoodEpoch Cursor Rules Pack v1
+# Applies to: Astro 5.x
+# Stack: Astro 5, TypeScript 5.5+, optional React/Svelte/Vue islands
+
+## Mental Model: HTML-First, Islands for Interactivity
+
+- Astro ships zero JavaScript by default. Every interactive piece must be explicitly opted in
+- "Islands architecture": interactive components are hydrated independently
+- Perfect for: content sites, docs, marketing, blogs, anything where most UI is static
+- Use Astro for the shell/layout/content, UI framework (React/Svelte) only for interactive islands
+
+## Component Types
+
+- `.astro` components: server-rendered, no JavaScript in browser unless you add a `<script>`
+- UI framework components (React, Svelte, Vue): hydrated with `client:*` directive
+- Markdown/MDX: content collections for blog posts, docs, etc.
+
+## Astro Component Syntax
+
+```astro
+---
+// Component Script (runs on server at build/request time)
+import { Image } from 'astro:assets'
+import { getCollection } from 'astro:content'
+import PostCard from '../components/PostCard.astro'
+
+const posts = await getCollection('blog')
+const { title, description } = Astro.props
+---
+
+<!-- Template (pure HTML output, no virtual DOM) -->
+<article>
+  <h1>{title}</h1>
+  <p>{description}</p>
+  {posts.map(post => <PostCard post={post} />)}
+</article>
+
+<style>
+  /* Scoped CSS — no class name conflicts */
+  article { max-width: 65ch; }
+</style>
+```
+
+## Islands — Interactive Components
+
+- Use `client:load` for components needed immediately on page load (rare)
+- Use `client:idle` for components that can wait until browser is idle (navigation, search)
+- Use `client:visible` for components below the fold (comments, charts)
+- Use `client:media` for responsive breakpoint-specific components
+- NEVER use `client:load` for everything — defeats the purpose of Astro:
+  ```astro
+  <!-- Bad: hydrates immediately, blocks -->
+  <SearchBar client:load />
+  
+  <!-- Good: hydrates when visible in viewport -->
+  <CommentSection client:visible />
+  
+  <!-- Good: hydrates when browser is idle -->
+  <NavigationMenu client:idle />
+  ```
+
+## Content Collections (Astro 5)
+
+- Define typed schemas with zod for all content:
+  ```typescript
+  // src/content/config.ts
+  import { defineCollection, z } from 'astro:content'
+  
+  export const collections = {
+    blog: defineCollection({
+      type: 'content',
+      schema: ({ image }) => z.object({
+        title: z.string(),
+        description: z.string(),
+        pubDate: z.coerce.date(),
+        hero: image().optional(),
+        tags: z.array(z.string()).default([]),
+        draft: z.boolean().default(false),
+      })
+    })
+  }
+  ```
+- Query with `getCollection('blog', entry => !entry.data.draft)` to filter drafts
+- Use `getEntry` for single entry lookup by slug
+
+## Routing
+
+- File-based routing under `src/pages/`
+- `[slug].astro` for dynamic routes
+- Static routes: export `getStaticPaths()` returning all possible params
+- SSR routes: no `getStaticPaths` needed, runs on demand
+- API routes: `src/pages/api/*.ts` that export GET/POST handlers
+
+## Server Side Rendering (SSR)
+
+- Enable SSR in `astro.config.mjs`: `output: 'server'` or `output: 'hybrid'`
+- Hybrid mode: static by default, opt-in to SSR per page with `export const prerender = false`
+- Access request cookies: `Astro.cookies.get('session')?.value`
+- Redirect: `return Astro.redirect('/login')`
+- Environment variables: `import.meta.env.SECRET` for server-only, `PUBLIC_*` prefix for client
+
+## Image Optimization
+
+- Always use `<Image>` from `astro:assets` — never raw `<img>` for local images
+- Automatic format conversion (WebP/AVIF), lazy loading, sizing
+- Remote images need `domains` or `remotePatterns` in config
+
+## Performance Defaults
+
+- Zero JavaScript ships unless you use `client:*` — keep it that way
+- Inline critical CSS: Astro's scoped styles are inlined automatically
+- Use `import.meta.glob` for bulk imports of content files
+- Preload fonts with `<link rel="preload">` in BaseLayout
+
+## Layouts
+
+- Create `src/layouts/BaseLayout.astro` with HTML boilerplate, meta tags, fonts
+- Pass page-specific metadata via props: `<BaseLayout title={title} description={desc}>`
+- Slot content with `<slot />` — named slots for header/footer overrides
+
+## Integrations
+
+- `@astrojs/react` for React islands
+- `@astrojs/tailwind` for Tailwind CSS
+- `@astrojs/sitemap` for automatic sitemap generation
+- `@astrojs/mdx` for MDX support in content collections
+- `@astrojs/vercel` or `@astrojs/cloudflare` for deployment

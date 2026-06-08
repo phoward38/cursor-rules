@@ -1,0 +1,104 @@
+# Universal TypeScript Rules — GoodEpoch Cursor Rules Pack v1
+# Applies to: Any TypeScript project
+# Compatible with: React 19, Next.js 15, Node.js 22, TypeScript 5.5+
+
+## TypeScript Fundamentals
+
+- Use TypeScript 5.5+ features: strict mode, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` enabled in tsconfig
+- Never use `any`. Use `unknown` for truly unknown types, then narrow with type guards
+- Prefer `type` over `interface` for object shapes unless declaration merging is needed
+- Use `satisfies` operator to validate object literals against a type without widening
+- Always define return types on exported functions
+- Use `const` assertions (`as const`) for literal types and readonly arrays
+- Discriminated unions over optional properties: `{ kind: 'loading' } | { kind: 'error', error: Error } | { kind: 'data', data: T }`
+
+## File and Module Conventions
+
+- One primary export per file. Named exports preferred over default exports (except pages/layouts)
+- Co-locate related files: `feature/Component.tsx`, `feature/Component.test.tsx`, `feature/Component.types.ts`
+- Index barrel files only at package/feature boundaries, not deeply nested
+- Import order: external packages → internal aliases → relative imports → types
+- Use path aliases (`@/`) for internal imports, never `../../../`
+
+## Naming Conventions
+
+- Components: PascalCase (`UserProfile`, `AuthButton`)
+- Hooks: `use` prefix, camelCase (`useUser`, `useFormState`)
+- Utilities/helpers: camelCase (`formatDate`, `parseConfig`)
+- Constants: SCREAMING_SNAKE_CASE for module-level, camelCase for local
+- Types/interfaces: PascalCase, no `I` prefix, no `Type` suffix (`User`, `Config`, `ApiResponse`)
+- Event handlers: `handle` prefix (`handleSubmit`, `handleClick`, `handleChange`)
+- Boolean variables: `is`, `has`, `can`, `should` prefix (`isLoading`, `hasError`, `canSubmit`)
+
+## Error Handling
+
+- Use `Result<T, E>` pattern for operations that can fail predictably:
+  ```typescript
+  type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E }
+  ```
+- Never swallow errors with empty catch blocks
+- Always log errors with context before rethrowing
+- Use custom error classes that extend `Error` with structured metadata
+- For async operations, always handle both the happy path and error path explicitly
+
+## Async and Promises
+
+- Use `async/await` over `.then()/.catch()` chains
+- Never use `Promise.all` with side effects that can fail partially without rollback
+- Use `Promise.allSettled` when you need all results regardless of failure
+- For parallel independent fetches: `const [a, b] = await Promise.all([fetchA(), fetchB()])`
+- Avoid async in useEffect — create an inner async function and call it
+
+## Functions and Logic
+
+- Functions should do one thing. If you can't describe it in one sentence, split it
+- Max 3 levels of nesting. Extract early returns or helper functions beyond that
+- Prefer pure functions — same input, same output, no side effects
+- Default parameters over `|| fallback` patterns: `function foo(x = 0)` not `function foo(x) { x = x || 0 }`
+- Destructure objects at parameter level: `function user({ id, name }: User)` not `function user(user: User)`
+
+## React Fundamentals (all frameworks)
+
+- Function components only. Zero class components
+- Hooks at the top of the component, never conditional
+- Extract custom hooks for any logic that involves state + effects
+- Memoize sparingly: only when profiling shows a problem. `useMemo`/`useCallback` are not free
+- Key prop must be stable and unique — never array index for dynamic lists
+- Avoid prop drilling beyond 2 levels — use composition, context, or state library
+
+## State Management
+
+- Prefer URL state (search params) for filterable/shareable UI state
+- Prefer server state (React Query / SWR / server components) over client state for async data
+- `useState` for truly local, ephemeral UI state only
+- `useReducer` when state transitions have business logic
+- Zustand for global client state if needed — never Redux in 2026
+
+## Security
+
+- Never interpolate user input into SQL — always parameterized queries
+- Sanitize and validate ALL inputs at the server boundary (zod preferred)
+- Never log sensitive data (passwords, tokens, PII)
+- Store secrets in environment variables, never in code or version control
+- Use `crypto.randomUUID()` for IDs, not `Math.random()`
+
+## Comments and Documentation
+
+- Comments explain WHY, not WHAT. The code shows what; comments explain intent and decisions
+- Add JSDoc only on public APIs and utility functions
+- Mark workarounds with `// TODO(#issue): reason` — include issue number
+- Remove console.log before committing. Use structured logging in production
+
+## Performance
+
+- Measure before optimizing. Profile first
+- Lazy-load heavy dependencies: `const { heavyFn } = await import('./heavy')`
+- Avoid creating objects/arrays in render hot paths
+- Prefer CSS over JS for animations
+
+## Testing Mindset
+
+- Test behavior, not implementation
+- Prefer integration tests over unit tests for UI
+- Mock at the network layer (MSW), not the module layer
+- Every bug gets a regression test before the fix

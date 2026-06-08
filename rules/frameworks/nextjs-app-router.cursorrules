@@ -1,0 +1,112 @@
+# Next.js 15 App Router Rules — GoodEpoch Cursor Rules Pack v1
+# Applies to: Next.js 15.x with App Router
+# Stack: Next.js 15, React 19, TypeScript 5.5+
+
+## Server vs Client Components — The Core Boundary
+
+- Server Components are the default. NEVER add 'use client' without explicit reason
+- 'use client' is only justified for: browser APIs (window/document), event handlers (onClick etc),
+  useState, useEffect, useReducer, useRef for DOM access, third-party libs that require client
+- Never fetch data in Client Components. Fetch in Server Components, pass down as props
+- Server Components can be async — use `await` directly at the top level
+- When you need interactivity + data, split: parent Server Component fetches, child Client Component handles UI
+
+## Data Fetching Patterns
+
+- Fetch data in page.tsx or layout.tsx using async Server Components:
+  ```typescript
+  // app/users/page.tsx
+  export default async function UsersPage() {
+    const users = await db.query.users.findMany()
+    return <UserList users={users} />
+  }
+  ```
+- Use `cache()` from React for request deduplication across the component tree
+- Use `unstable_cache` from next/cache for cross-request caching with tags:
+  ```typescript
+  const getUser = unstable_cache(
+    async (id: string) => db.query.users.findFirst({ where: eq(users.id, id) }),
+    ['user'],
+    { tags: ['users'], revalidate: 60 }
+  )
+  ```
+- Parallel data fetching with `Promise.all` in Server Components
+- Use `Suspense` boundaries to stream in data as it resolves
+
+## Server Actions — Mutations
+
+- ALL form mutations use Server Actions. Never API routes for same-origin mutations:
+  ```typescript
+  // actions/user.ts
+  'use server'
+  export async function createUser(formData: FormData) {
+    const parsed = createUserSchema.safeParse(Object.fromEntries(formData))
+    if (!parsed.success) return { error: parsed.error.flatten() }
+    await db.insert(users).values(parsed.data)
+    revalidatePath('/users')
+  }
+  ```
+- Validate ALL server action inputs with zod before processing
+- Return typed responses: `{ error: string } | { data: T }` — never throw from server actions
+- Use `revalidatePath` or `revalidateTag` after mutations, not `router.refresh()`
+- Bind actions to forms with the `action` prop or use `startTransition` for programmatic calls
+
+## File and Folder Conventions
+
+- `app/` directory structure mirrors URL structure
+- Required files per route: `page.tsx` (required), `layout.tsx`, `loading.tsx`, `error.tsx`, `not-found.tsx`
+- `loading.tsx` creates automatic Suspense boundary — use it for skeleton UIs
+- `error.tsx` must be a Client Component (`'use client'`) with reset capability
+- Route groups `(group)/` for organization without affecting URL
+- Private folders `_components/` for components that shouldn't be routes
+- `app/api/` only for: webhooks, OAuth callbacks, third-party integrations, public APIs
+
+## Metadata and SEO
+
+- Export `metadata` object or `generateMetadata` function from every page:
+  ```typescript
+  export const metadata: Metadata = {
+    title: 'Page Title',
+    description: 'Page description',
+    openGraph: { title: 'OG Title', images: ['/og.png'] }
+  }
+  ```
+- Use `generateMetadata` for dynamic pages that need database data
+- Configure `metadataBase` in root layout for absolute OG image URLs
+
+## Routing and Navigation
+
+- Use `<Link>` from `next/link` for ALL internal navigation — never `<a>` tags
+- `useRouter` from `next/navigation` (not `next/router`) for programmatic navigation
+- `usePathname`, `useSearchParams` for reading current URL in Client Components
+- Dynamic routes: `[id]` for single, `[...slug]` for catch-all, `[[...slug]]` for optional catch-all
+- `generateStaticParams` for static generation of dynamic routes
+
+## Images and Fonts
+
+- Use `next/image` for ALL images. Never raw `<img>` tags in App Router
+- Always provide `width`/`height` or use `fill` with a sized container
+- Use `next/font` for all fonts — zero layout shift, automatic self-hosting
+- Priority prop on above-the-fold images: `<Image priority />`
+
+## Middleware
+
+- `middleware.ts` at project root for auth guards, redirects, A/B testing
+- Middleware runs on edge — no Node.js APIs, no database calls
+- Use `matcher` config to avoid running on static assets:
+  ```typescript
+  export const config = { matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'] }
+  ```
+
+## Environment Variables
+
+- `NEXT_PUBLIC_` prefix for client-exposed vars only
+- All server-only vars accessed via server components/actions — never expose to client
+- Validate env vars at startup with zod in `lib/env.ts`
+
+## Performance Patterns
+
+- Use `React.Suspense` with meaningful fallbacks at data boundaries
+- `dynamic()` from `next/dynamic` for heavy client components with `ssr: false` when needed
+- Static pages where possible — use `revalidate` for ISR rather than fully dynamic
+- Bundle analysis: `@next/bundle-analyzer` to find large client-side imports
